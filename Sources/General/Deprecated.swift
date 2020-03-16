@@ -65,7 +65,7 @@ extension KingfisherWrapper where Base: KFCrossPlatformImage {
 
 @available(*, deprecated, message: "Will be removed soon. Use `Result<RetrieveImageResult>` based callback instead")
 public typealias CompletionHandler =
-    ((_ image: KFCrossPlatformImage?, _ error: NSError?, _ cacheType: CacheType, _ imageURL: URL?) -> Void)
+    ((_ image: Data?, _ error: NSError?, _ cacheType: CacheType, _ imageURL: URL?) -> Void)
 
 @available(*, deprecated, message: "Will be removed soon. Use `Result<ImageLoadingResult>` based callback instead")
 public typealias ImageDownloaderCompletionHandler =
@@ -142,83 +142,14 @@ public typealias ImageDownloaderProgressBlock = DownloadProgressBlock
 #if !os(watchOS)
 // MARK: - Deprecated
 extension KingfisherWrapper where Base: KFCrossPlatformImageView {
-    @available(*, deprecated, message: "Use `Result` based callback instead.")
-    @discardableResult
-    public func setImage(with resource: Resource?,
-                         placeholder: Placeholder? = nil,
-                         options: KingfisherOptionsInfo? = nil,
-                         progressBlock: DownloadProgressBlock? = nil,
-                         completionHandler: CompletionHandler?) -> DownloadTask?
-    {
-        return setImage(with: resource, placeholder: placeholder, options: options, progressBlock: progressBlock) {
-            result in
-            switch result {
-            case .success(let value):
-                completionHandler?(value.image, nil, value.cacheType, value.source.url)
-            case .failure(let error):
-                completionHandler?(nil, error as NSError, .none, nil)
-            }
-        }
-    }
+
 }
 #endif
 
 #if canImport(UIKit) && !os(watchOS)
 // MARK: - Deprecated
 extension KingfisherWrapper where Base: UIButton {
-    @available(*, deprecated, message: "Use `Result` based callback instead.")
-    @discardableResult
-    public func setImage(
-        with resource: Resource?,
-        for state: UIControl.State,
-        placeholder: UIImage? = nil,
-        options: KingfisherOptionsInfo? = nil,
-        progressBlock: DownloadProgressBlock? = nil,
-        completionHandler: CompletionHandler?) -> DownloadTask?
-    {
-        return setImage(
-            with: resource,
-            for: state,
-            placeholder: placeholder,
-            options: options,
-            progressBlock: progressBlock)
-        {
-            result in
-            switch result {
-            case .success(let value):
-                completionHandler?(value.image, nil, value.cacheType, value.source.url)
-            case .failure(let error):
-                completionHandler?(nil, error as NSError, .none, nil)
-            }
-        }
-    }
-    
-    @available(*, deprecated, message: "Use `Result` based callback instead.")
-    @discardableResult
-    public func setBackgroundImage(
-        with resource: Resource?,
-        for state: UIControl.State,
-        placeholder: UIImage? = nil,
-        options: KingfisherOptionsInfo? = nil,
-        progressBlock: DownloadProgressBlock? = nil,
-        completionHandler: CompletionHandler?) -> DownloadTask?
-    {
-        return setBackgroundImage(
-            with: resource,
-            for: state,
-            placeholder: placeholder,
-            options: options,
-            progressBlock: progressBlock)
-        {
-            result in
-            switch result {
-            case .success(let value):
-                completionHandler?(value.image, nil, value.cacheType, value.source.url)
-            case .failure(let error):
-                completionHandler?(nil, error as NSError, .none, nil)
-            }
-        }
-    }
+
 }
 #endif
 
@@ -384,7 +315,7 @@ extension ImageCache {
     renamed: "retrieveImage(forKey:options:callbackQueue:completionHandler:)")
     open func retrieveImage(forKey key: String,
                             options: KingfisherOptionsInfo?,
-                            completionHandler: ((KFCrossPlatformImage?, CacheType) -> Void)?)
+                            completionHandler: ((Data?, CacheType) -> Void)?)
     {
         retrieveImage(
             forKey: key,
@@ -394,7 +325,7 @@ extension ImageCache {
             result in
             do {
                 let value = try result.get()
-                completionHandler?(value.image, value.cacheType)
+                completionHandler?(value.data, value.cacheType)
             } catch {
                 completionHandler?(nil, .none)
             }
@@ -411,8 +342,7 @@ extension ImageCache {
     }
 
     @available(*, deprecated, message: "Use `Result` based callback instead.")
-    open func store(_ image: KFCrossPlatformImage,
-                    original: Data? = nil,
+    open func store(original: Data,
                     forKey key: String,
                     processorIdentifier identifier: String = "",
                     cacheSerializer serializer: CacheSerializer = DefaultCacheSerializer.default,
@@ -420,7 +350,6 @@ extension ImageCache {
                     completionHandler: (() -> Void)?)
     {
         store(
-            image,
             original: original,
             forKey: key,
             processorIdentifier: identifier,

@@ -132,7 +132,7 @@ open class ImageDownloader {
     /// Delegate of this `ImageDownloader` object. See `ImageDownloaderDelegate` protocol for more.
     open weak var delegate: ImageDownloaderDelegate?
     
-    /// A responder for authentication challenge. 
+    /// A responder for authentication challenge.
     /// Downloader will forward the received authentication challenge for the downloading session to this responder.
     open weak var authenticationChallengeResponder: AuthenticationChallengeResponsable?
 
@@ -290,23 +290,14 @@ open class ImageDownloader {
                 switch result {
                 // Download finished. Now process the data to an image.
                 case .success(let (data, response)):
-                    let processor = ImageDataProcessor(
-                        data: data, callbacks: callbacks, processingQueue: options.processingQueue)
-                    processor.onImageProcessed.delegate(on: self) { (self, result) in
-                        // `onImageProcessed` will be called for `callbacks.count` times, with each
-                        // `SessionDataTask.TaskCallback` as the input parameter.
-                        // result: Result<Image>, callback: SessionDataTask.TaskCallback
-                        let (result, callback) = result
+                    callbacks.forEach { callback in
 
-                        if let image = try? result.get() {
-                            self.delegate?.imageDownloader(self, didDownload: image, for: url, with: response)
-                        }
+                        let imageResult =  ImageLoadingResult(image: UIImage(), url: url, originalData: data)
+                        let successValue:Result<ImageLoadingResult, KingfisherError> = .success(imageResult)
 
-                        let imageResult = result.map { ImageLoadingResult(image: $0, url: url, originalData: data) }
                         let queue = callback.options.callbackQueue
-                        queue.execute { callback.onCompleted?.call(imageResult) }
+                        queue.execute { callback.onCompleted?.call(successValue) }
                     }
-                    processor.process()
 
                 case .failure(let error):
                     callbacks.forEach { callback in

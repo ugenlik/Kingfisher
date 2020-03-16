@@ -37,7 +37,7 @@ public typealias DownloadProgressBlock = ((_ receivedSize: Int64, _ totalSize: I
 public struct RetrieveImageResult {
 
     /// Gets the image object of this result.
-    public let image: KFCrossPlatformImage
+    public let image: Data
 
     /// Gets the cache source of the image. It indicates from which layer of cache this image is retrieved.
     /// If the image is just downloaded from network, `.none` will be returned.
@@ -338,7 +338,6 @@ public class KingfisherManager {
             // Add image to cache.
             let targetCache = options.targetCache ?? self.cache
             targetCache.store(
-                value.image,
                 original: value.originalData,
                 forKey: source.cacheKey,
                 options: options,
@@ -347,7 +346,7 @@ public class KingfisherManager {
                 _ in
                 coordinator.apply(.cachingImage) {
                     let result = RetrieveImageResult(
-                        image: value.image,
+                        image: value.originalData,
                         cacheType: .none,
                         source: source,
                         originalSource: context.originalSource
@@ -369,7 +368,7 @@ public class KingfisherManager {
                     _ in
                     coordinator.apply(.cachingOriginalImage) {
                         let result = RetrieveImageResult(
-                            image: value.image,
+                            image: value.originalData,
                             cacheType: .none,
                             source: source,
                             originalSource: context.originalSource
@@ -381,7 +380,7 @@ public class KingfisherManager {
 
             coordinator.apply(.cacheInitiated) {
                 let result = RetrieveImageResult(
-                    image: value.image,
+                    image: value.originalData,
                     cacheType: .none,
                     source: source,
                     originalSource: context.originalSource
@@ -465,10 +464,10 @@ public class KingfisherManager {
                     result.match(
                         onSuccess: { cacheResult in
                             let value: Result<RetrieveImageResult, KingfisherError>
-                            if let image = cacheResult.image {
+                            if let data = cacheResult.data {
                                 value = result.map {
                                     RetrieveImageResult(
-                                        image: image,
+                                        image: data,
                                         cacheType: $0.cacheType,
                                         source: source,
                                         originalSource: context.originalSource
@@ -513,21 +512,14 @@ public class KingfisherManager {
 
                 result.match(
                     onSuccess: { cacheResult in
-                        guard let image = cacheResult.image else {
+                        guard let data = cacheResult.data else {
                             assertionFailure("The image (under key: \(key) should be existing in the original cache.")
                             return
                         }
 
                         let processor = options.processor
                         (options.processingQueue ?? self.processingQueue).execute {
-                            let item = ImageProcessItem.image(image)
-                            guard let processedImage = processor.process(item: item, options: options) else {
-                                let error = KingfisherError.processorError(
-                                    reason: .processingFailed(processor: processor, item: item))
-                                options.callbackQueue.execute { completionHandler?(.failure(error)) }
-                                return
-                            }
-
+                         
                             var cacheOptions = options
                             cacheOptions.callbackQueue = .untouch
 
@@ -535,7 +527,7 @@ public class KingfisherManager {
                                 shouldWaitForCache: options.waitForCache, shouldCacheOriginal: false)
 
                             targetCache.store(
-                                processedImage,
+                                original: data,
                                 forKey: key,
                                 options: cacheOptions,
                                 toDisk: !options.cacheMemoryOnly)
@@ -543,7 +535,7 @@ public class KingfisherManager {
                                 _ in
                                 coordinator.apply(.cachingImage) {
                                     let value = RetrieveImageResult(
-                                        image: processedImage,
+                                        image: data,
                                         cacheType: .none,
                                         source: source,
                                         originalSource: context.originalSource
@@ -554,7 +546,7 @@ public class KingfisherManager {
 
                             coordinator.apply(.cacheInitiated) {
                                 let value = RetrieveImageResult(
-                                    image: processedImage,
+                                    image: data,
                                     cacheType: .none,
                                     source: source,
                                     originalSource: context.originalSource

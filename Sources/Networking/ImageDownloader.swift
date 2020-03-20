@@ -345,6 +345,7 @@ open class ImageDownloader {
     @discardableResult
     open func downloadImage(
         with url: URL,
+        isVideo:Bool? = false,
         options: KingfisherOptionsInfo? = nil,
         progressBlock: DownloadProgressBlock? = nil,
         completionHandler: ((Result<ImageLoadingResult, KingfisherError>) -> Void)? = nil) -> DownloadTask?
@@ -356,6 +357,7 @@ open class ImageDownloader {
         return downloadImage(
             with: url,
             options: info,
+            isVideo:isVideo,
             completionHandler: completionHandler)
     }
 }

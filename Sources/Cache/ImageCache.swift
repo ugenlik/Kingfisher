@@ -95,15 +95,6 @@ extension Data: DataTransformable {
     public static let empty = Data()
 }
 
-extension Data:CacheCostCalculable
-{
-    public var cacheCost: Int {
-        //return pixel * cgImage.bitsPerPixel / 8
-        return self.count
-    }
-}
-
-
 
 /// Represents the getting image operation from the cache.
 ///
@@ -113,17 +104,17 @@ extension Data:CacheCostCalculable
 public enum ImageCacheResult {
     
     /// The image can be retrieved from disk cache.
-    case disk(Data)
+    case disk(KFCrossPlatformImage)
     
     /// The image can be retrieved memory cache.
-    case memory(Data)
+    case memory(KFCrossPlatformImage)
     
     /// The image does not exist in the cache.
     case none
     
     /// Extracts the image from cache result. It returns the associated `Image` value for
     /// `.disk` and `.memory` case. For `.none` case, `nil` is returned.
-    public var data: Data? {
+    public var image: KFCrossPlatformImage? {
         switch self {
         case .disk(let image): return image
         case .memory(let image): return image
@@ -160,7 +151,7 @@ open class ImageCache {
     /// The `MemoryStorage.Backend` object used in this cache. This storage holds loaded images in memory with a
     /// reasonable expire duration and a maximum memory usage. To modify the configuration of a storage, just set
     /// the storage `config` and its properties.
-    public let memoryStorage: MemoryStorage.Backend<Data>
+    public let memoryStorage: MemoryStorage.Backend<KFCrossPlatformImage>
     
     /// The `DiskStorage.Backend` object used in this cache. This storage stores loaded images in disk with a
     /// reasonable expire duration and a maximum disk usage. To modify the configuration of a storage, just set
@@ -180,7 +171,7 @@ open class ImageCache {
     ///   - memoryStorage: The `MemoryStorage.Backend` object to use in the image cache.
     ///   - diskStorage: The `DiskStorage.Backend` object to use in the image cache.
     public init(
-        memoryStorage: MemoryStorage.Backend<Data>,
+        memoryStorage: MemoryStorage.Backend<KFCrossPlatformImage>,
         diskStorage: DiskStorage.Backend<Data>)
     {
         self.memoryStorage = memoryStorage
@@ -250,7 +241,7 @@ open class ImageCache {
 
         let totalMemory = ProcessInfo.processInfo.physicalMemory
         let costLimit = totalMemory / 4
-        let memoryStorage = MemoryStorage.Backend<Data>(config:
+        let memoryStorage = MemoryStorage.Backend<KFCrossPlatformImage>(config:
             .init(totalCostLimit: (costLimit > Int.max) ? Int.max : Int(costLimit)))
 
         var diskConfig = DiskStorage.Config(
@@ -273,7 +264,9 @@ open class ImageCache {
 
     // MARK: Storing Images
 
-    open func store(original: Data,
+    open func store(_ image: KFCrossPlatformImage,
+                    original: Data? = nil,
+                    isVideo:Bool? = false,
                     forKey key: String,
                     options: KingfisherParsedOptionsInfo,
                     toDisk: Bool = true,
@@ -284,7 +277,7 @@ open class ImageCache {
         
         let computedKey = key.computedKey(with: identifier)
         // Memory storage should not throw.
-        memoryStorage.storeNoThrow(value: original, forKey: computedKey, expiration: options.memoryCacheExpiration)
+        memoryStorage.storeNoThrow(value: image, forKey: computedKey, expiration: options.memoryCacheExpiration)
         
         guard toDisk else {
             if let completionHandler = completionHandler {
@@ -295,13 +288,37 @@ open class ImageCache {
         }
         
         ioQueue.async {
-           self.syncStoreToDisk(
-                original,
-                forKey: key,
-                processorIdentifier: identifier,
-                callbackQueue: callbackQueue,
-                expiration: options.diskCacheExpiration,
-                completionHandler: completionHandler)
+            if let video = isVideo, let videoData = original, video {
+                self.syncStoreToDisk(
+                     videoData,
+                     forKey: key,
+                     processorIdentifier: identifier,
+                     callbackQueue: callbackQueue,
+                     expiration: options.diskCacheExpiration,
+                     completionHandler: completionHandler)
+            }
+            else{
+                let serializer = options.cacheSerializer
+                if let data = serializer.data(with: image, original: original) {
+                    self.syncStoreToDisk(
+                        data,
+                        forKey: key,
+                        processorIdentifier: identifier,
+                        callbackQueue: callbackQueue,
+                        expiration: options.diskCacheExpiration,
+                        completionHandler: completionHandler)
+                } else {
+                    guard let completionHandler = completionHandler else { return }
+                    
+                    let diskError = KingfisherError.cacheError(
+                        reason: .cannotSerializeImage(image: image, original: original, serializer: serializer))
+                    let result = CacheStoreResult(
+                        memoryCacheResult: .success(()),
+                        diskCacheResult: .failure(diskError))
+                    callbackQueue.execute { completionHandler(result) }
+                }
+            }
+
         }
     }
 
@@ -326,7 +343,9 @@ open class ImageCache {
     ///                    from an internal file IO queue. To change this behavior, specify another `CallbackQueue`
     ///                    value.
     ///   - completionHandler: A closure which is invoked when the cache operation finishes.
-    open func store(original: Data,
+    open func store(_ image: KFCrossPlatformImage,
+                      original: Data? = nil,
+                      isVideo:Bool? = false,
                       forKey key: String,
                       processorIdentifier identifier: String = "",
                       cacheSerializer serializer: CacheSerializer = DefaultCacheSerializer.default,
@@ -346,7 +365,7 @@ open class ImageCache {
             .cacheSerializer(serializer),
             .callbackQueue(callbackQueue)
         ])
-        store(original: original, forKey: key, options: options,
+        store(image, original: original,isVideo:isVideo,forKey: key, options: options,
               toDisk: toDisk, completionHandler: completionHandler)
     }
     
@@ -451,7 +470,7 @@ open class ImageCache {
 
         // Try to check the image from memory cache first.
         if let image = retrieveImageInMemoryCache(forKey: key, options: options) {
-
+            let image = options.imageModifier?.modify(image) ?? image
             callbackQueue.execute { completionHandler(.success(.memory(image))) }
         } else if options.fromMemoryCacheOrRefresh {
             callbackQueue.execute { completionHandler(.success(.none)) }
@@ -461,27 +480,28 @@ open class ImageCache {
             self.retrieveImageInDiskCache(forKey: key, options: options, callbackQueue: callbackQueue) {
                 result in
                 switch result {
-                case .success(let originalData):
+                case .success(let image):
 
-                    guard let data = originalData else {
+                    guard let image = image else {
                         // No image found in disk storage.
                         callbackQueue.execute { completionHandler(.success(.none)) }
                         return
                     }
-                    
+
+                    let finalImage = options.imageModifier?.modify(image) ?? image
                     // Cache the disk image to memory.
                     // We are passing `false` to `toDisk`, the memory cache does not change
                     // callback queue, we can call `completionHandler` without another dispatch.
                     var cacheOptions = options
                     cacheOptions.callbackQueue = .untouch
                     self.store(
-                        original: data,
+                        finalImage,
                         forKey: key,
                         options: cacheOptions,
                         toDisk: false)
                     {
                         _ in
-                        callbackQueue.execute { completionHandler(.success(.disk(data))) }
+                        callbackQueue.execute { completionHandler(.success(.disk(finalImage))) }
                     }
                 case .failure(let error):
                     callbackQueue.execute { completionHandler(.failure(error)) }
@@ -516,7 +536,7 @@ open class ImageCache {
 
     func retrieveImageInMemoryCache(
         forKey key: String,
-        options: KingfisherParsedOptionsInfo) -> Data?
+        options: KingfisherParsedOptionsInfo) -> KFCrossPlatformImage?
     {
         let computedKey = key.computedKey(with: options.processor.identifier)
         return memoryStorage.value(forKey: computedKey, extendingExpiration: options.memoryCacheAccessExtendingExpiration)
@@ -531,7 +551,7 @@ open class ImageCache {
     ///            has already expired, `nil` is returned.
     open func retrieveImageInMemoryCache(
         forKey key: String,
-        options: KingfisherOptionsInfo? = nil) -> Data?
+        options: KingfisherOptionsInfo? = nil) -> KFCrossPlatformImage?
     {
         return retrieveImageInMemoryCache(forKey: key, options: KingfisherParsedOptionsInfo(options))
     }
@@ -540,18 +560,17 @@ open class ImageCache {
         forKey key: String,
         options: KingfisherParsedOptionsInfo,
         callbackQueue: CallbackQueue = .untouch,
-        completionHandler: @escaping (Result<Data?, KingfisherError>) -> Void)
+        completionHandler: @escaping (Result<KFCrossPlatformImage?, KingfisherError>) -> Void)
     {
         let computedKey = key.computedKey(with: options.processor.identifier)
         let loadingQueue: CallbackQueue = options.loadDiskFileSynchronously ? .untouch : .dispatch(ioQueue)
         loadingQueue.execute {
             do {
+                var image: KFCrossPlatformImage? = nil
                 if let data = try self.diskStorage.value(forKey: computedKey, extendingExpiration: options.diskCacheAccessExtendingExpiration) {
-                    callbackQueue.execute { completionHandler(.success(data)) }
+                    image = options.cacheSerializer.image(with: data, options: options)
                 }
-                else{
-                    callbackQueue.execute { completionHandler(.failure(KingfisherError.cacheError(reason: .imageNotExisting(key: "Couldnt get data from disk")))) }
-                }
+                callbackQueue.execute { completionHandler(.success(image)) }
             } catch {
                 if let error = error as? KingfisherError {
                     callbackQueue.execute { completionHandler(.failure(error)) }
@@ -573,7 +592,7 @@ open class ImageCache {
         forKey key: String,
         options: KingfisherOptionsInfo? = nil,
         callbackQueue: CallbackQueue = .untouch,
-        completionHandler: @escaping (Result<Data?, KingfisherError>) -> Void)
+        completionHandler: @escaping (Result<KFCrossPlatformImage?, KingfisherError>) -> Void)
     {
         retrieveImageInDiskCache(
             forKey: key,

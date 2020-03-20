@@ -206,6 +206,7 @@ open class ImageDownloader {
     open func downloadImage(
         with url: URL,
         options: KingfisherParsedOptionsInfo,
+        isVideo:Bool? = false,
         completionHandler: ((Result<ImageLoadingResult, KingfisherError>) -> Void)? = nil) -> DownloadTask?
     {
         // Creates default request.
@@ -290,15 +291,35 @@ open class ImageDownloader {
                 switch result {
                 // Download finished. Now process the data to an image.
                 case .success(let (data, response)):
-                    callbacks.forEach { callback in
+                    if let video = isVideo, video {
+                        callbacks.forEach { callback in
 
-                        let imageResult =  ImageLoadingResult(image: UIImage(), url: url, originalData: data)
-                        let successValue:Result<ImageLoadingResult, KingfisherError> = .success(imageResult)
+                            let imageResult =  ImageLoadingResult(image: UIImage(), url: url, originalData: data)
+                            let successValue:Result<ImageLoadingResult, KingfisherError> = .success(imageResult)
 
-                        let queue = callback.options.callbackQueue
-                        queue.execute { callback.onCompleted?.call(successValue) }
+                            let queue = callback.options.callbackQueue
+                            queue.execute { callback.onCompleted?.call(successValue) }
+                        }
                     }
+                    else {
+                        let processor = ImageDataProcessor(
+                            data: data, callbacks: callbacks, processingQueue: options.processingQueue)
+                        processor.onImageProcessed.delegate(on: self) { (self, result) in
+                            // `onImageProcessed` will be called for `callbacks.count` times, with each
+                            // `SessionDataTask.TaskCallback` as the input parameter.
+                            // result: Result<Image>, callback: SessionDataTask.TaskCallback
+                            let (result, callback) = result
 
+                            if let image = try? result.get() {
+                                self.delegate?.imageDownloader(self, didDownload: image, for: url, with: response)
+                            }
+
+                            let imageResult = result.map { ImageLoadingResult(image: $0, url: url, originalData: data) }
+                            let queue = callback.options.callbackQueue
+                            queue.execute { callback.onCompleted?.call(imageResult) }
+                        }
+                        processor.process()
+                    }
                 case .failure(let error):
                     callbacks.forEach { callback in
                         let queue = callback.options.callbackQueue
